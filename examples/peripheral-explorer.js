@@ -222,7 +222,7 @@ function explore(peripheral) {
 
                       console.log('Toggling Lock state to:', `${newState == LOCK_STATE ? 'LOCKED' : 'UNLOCKED'}`);
 
-                      prepareLockStateChangePayload(initialState, (encPayload) => {
+                      prepareLockStateChangePayload(newState, (encPayload) => {
                         console.log('Generated Payload = ', encPayload);
                         console.log('Expected Payload  = ', new Buffer([28, 31, 95, 16, -124, -68, 110, -102, 90, 75, -95, -108, -66, -21, -94, 70, 90, 17, 45, 16, 42, 121]));
 
