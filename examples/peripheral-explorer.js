@@ -20,9 +20,6 @@ const OTHER_SERVICE = "a1a51a187b7747d291db34a48dcd3de9";
 
 const services = {};
 
-const LOCK_PAYLOAD = new Buffer([15, -74, 28, -25, -82, 1, 112, 112, -24, 65, 28, -82, -78, 116, 117, 1]);
-const UNLOCK_PAYLOAD = new Buffer([-30, 40, -102, -98, -123, 0, 34, -46, -109, -38, 68, -28, 70, 99, -77, -108]);
-
 noble.on('stateChange', function(state) {
   if (state === 'poweredOn') {
     noble.startScanning();
@@ -316,22 +313,23 @@ function prepareHandshakePayload(reqId, nonce, callback) {
 }
 
 function prepareLockStateChangePayload(newState, callback) {
-  let payload = new Buffer(16);
+  let payload = new Buffer(14);
 
-  for (let i = 0; i < payload.length - 2; ++i) {
+  for (let i = 0; i < payload.length; ++i) {
     payload[i] = getRandomByte();
   }
 
   payload[5] = newState;
 
-  const reqIDBytes = new Buffer(14);
-  const crc = applyCrc16(payload.copy(reqIDBytes, 0, 0, 14));
+  const crc = applyCrc16(payload);
 
-  payload[14] = (crc >> 8) & 0xFF;
-  payload[15] = crc & 0xFF;
+  const payloadWithCrc = new Buffer(16);
+  payload.forEach((byte, i) => {
+    payloadWithCrc[i] = byte;
+  });
 
-  // THIS RIGHT HERE IS THE SINGLE THIN THREAD MAKING THE WHOLE THING WORK
-  payload = (newState == LOCK_STATE) ? LOCK_PAYLOAD : UNLOCK_PAYLOAD;
+  payloadWithCrc[14] = (crc >> 8) & 0xFF;
+  payloadWithCrc[15] = crc & 0xFF;
 
   const cipher = crypto.createCipheriv('aes-128-cbc', userKey, Buffer.alloc(16));
 
@@ -372,7 +370,7 @@ function prepareLockStateChangePayload(newState, callback) {
     callback(changeLockStatePayload);
   });
 
-  cipher.write(payload);
+  cipher.write(payloadWithCrc);
   cipher.end();
 }
 
