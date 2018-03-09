@@ -20,6 +20,9 @@ const OTHER_SERVICE = "a1a51a187b7747d291db34a48dcd3de9";
 
 const services = {};
 
+const LOCK_PAYLOAD = new Buffer([15, -74, 28, -25, -82, 1, 112, 112, -24, 65, 28, -82, -78, 116, 117, 1]);
+const UNLOCK_PAYLOAD = new Buffer([-30, 40, -102, -98, -123, 0, 34, -46, -109, -38, 68, -28, 70, 99, -77, -108]);
+
 noble.on('stateChange', function(state) {
   if (state === 'poweredOn') {
     noble.startScanning();
@@ -327,7 +330,8 @@ function prepareLockStateChangePayload(newState, callback) {
   payload[14] = (crc >> 8) & 0xFF;
   payload[15] = crc & 0xFF;
 
-  // payload = new Buffer([109, -29, -122, 104, 34, 1, -65, 65, 19, -4, 15, 61, -126, 83, -22, -98]);
+  payload = (newState == LOCK_STATE) ? LOCK_PAYLOAD : UNLOCK_PAYLOAD;
+
   const cipher = crypto.createCipheriv('aes-128-cbc', userKey, Buffer.alloc(16));
 
   let encPayload = null;
@@ -341,9 +345,6 @@ function prepareLockStateChangePayload(newState, callback) {
   });
 
   cipher.on('end', () => {
-    console.log('test ===')
-    console.log(encPayload);
-    console.log(new Buffer([35, 66, 74, 20, 25, -83, 60, 43, 76, 82, 22, 13, -128, -95, -4, 97]))
     const changeLockState = new Buffer(4 + encPayload.length);
     changeLockState[0] = 0x1c;
     changeLockState[1] = getRandomByte();
