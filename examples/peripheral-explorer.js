@@ -330,6 +330,7 @@ function prepareLockStateChangePayload(newState, callback) {
   payload[14] = (crc >> 8) & 0xFF;
   payload[15] = crc & 0xFF;
 
+  // THIS RIGHT HERE IS THE SINGLE THIN THREAD MAKING THE WHOLE THING WORK
   payload = (newState == LOCK_STATE) ? LOCK_PAYLOAD : UNLOCK_PAYLOAD;
 
   const cipher = crypto.createCipheriv('aes-128-cbc', userKey, Buffer.alloc(16));
