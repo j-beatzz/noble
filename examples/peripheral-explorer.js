@@ -1,10 +1,11 @@
 var async = require('async');
 const crypto = require('crypto');
 var noble = require('../index');
-const crc16 = require('crc16');
 
-const userKey = new Buffer('67e5660ed9df45c4b0e8c13a8656d003');
-const deviceID = '';
+const userKey = new Buffer('9f9d64d7c3d6029e');
+console.log(userKey);
+const LOCK_STATE = 0x01;
+const UNLOCK_STATE = 0x00;
 const CLCK = "1a53e10758f747e5a919acc9e05a908b";
 const STAT = "c2bea3d2ae334e9fabeee05377f8623f";
 const CRYP = "26397326157c4364acade7441b43e3fc";
@@ -173,6 +174,11 @@ function explore(peripheral) {
         function (err) {
           console.log('============  done  =============');
 
+          const statChar = services[OTHER_SERVICE]['chars'][STAT]['char'];
+          statChar.subscribe((data) => {
+            console.log('Notify', data);
+          });
+
           const crypChar = services[OTHER_SERVICE]['chars'][CRYP]['char'];
 
           crypChar.read((error, data) => {
@@ -187,82 +193,215 @@ function explore(peripheral) {
 
               const cmdsChar = services[OTHER_SERVICE]['chars'][CMDS]['char'];
 
-              cmdsChar.write(handshake, false, (data) => {
-
+              cmdsChar.write(handshake, false, (err) => {
                 const clckChar = services[OTHER_SERVICE]['chars'][CLCK]['char'];
 
                 clckChar.read((error, data) => {
                   console.log(error);
                   console.log(data);
 
-                  peripheral.disconnect();
+                  if (data[0] == 0x51) {
+                    console.log('USER_REQUEST_AUTHENTICATED');
+
+                    crypChar.subscribe((data) => {
+                      console.log('CRYP Notify', data);
+                    });
+
+                    const interval = setInterval(() => {
+                      refreshConnection(cmdsChar, clckChar);
+                    }, 1000);
+
+                    crypChar.read((error, data) => {
+                      console.log(error);
+                      console.log(data);
+
+                      console.log(`Initial State: ${data[1] == LOCK_STATE ? 'LOCKED' : 'UNLOCKED'}`);
+                      
+                      const initialState = data[1];
+                      const newState = initialState ^ 0x01;
+
+                      console.log('Toggling Lock state to:', `${newState == LOCK_STATE ? 'LOCKED' : 'UNLOCKED'}`);
+
+                      prepareLockStateChangePayload(initialState, (encPayload) => {
+                        console.log('Generated Payload = ', encPayload);
+                        console.log('Expected Payload  = ', new Buffer([28, 31, 95, 16, -124, -68, 110, -102, 90, 75, -95, -108, -66, -21, -94, 70, 90, 17, 45, 16, 42, 121]));
+
+                        cmdsChar.write(encPayload, false, (err) => {
+                          console.log(err);
+                          clckChar.read((error, data) => {
+                            console.log(error);
+                            console.log(data);
+                            clearInterval(interval);
+                            peripheral.disconnect();
+                          })
+                        });
+                      })
+                    });
+                  } else {
+                    console.log('USER_REQUEST_NOT_AUTHENTICATED');
+                  }
                 });
               });
             });
-          })
+          });
         }
       );
     });
   });
 }
 
+function refreshConnection(inputChar, outputChar) {
+  const payload = new Buffer(4);
+  payload[0] = 0x60;
+  payload[1] = getRandomByte();
+  payload[2] = getRandomByte();
+  payload[3] = 0;
+
+  const crc = applyCrc16(payload);
+
+  const payloadWithCrc = new Buffer(6);
+  payload.forEach((byte, i) => {
+    payloadWithCrc[i] = byte;
+  });
+
+  payloadWithCrc[4] = (crc >> 8) & 0xFF;
+  payloadWithCrc[5] = crc & 0xFF;
+
+  console.log('payloadWithCrc', payloadWithCrc);
+  inputChar.write(payloadWithCrc, false, (error) => {
+    outputChar.read((error, data) => {
+      console.log('status update');
+      console.log(error);
+      console.log(data);
+    })
+  }); 
+}
+
 function prepareHandshakePayload(reqId, nonce, callback) {
   console.log("PREPARE HANDSHAKE PAYLOAD");
   const hmac = crypto.createHmac('sha1', userKey);
   hmac.on('readable', () => {
-    const userKeyHMAC = hmac.read();
-    if (userKeyHMAC) {
-      let handshake = Buffer.alloc(4);
+    const nonceEnc = hmac.read();
+    if (nonceEnc) {
+      let handshake = new Buffer(4 + nonceEnc.length);
       handshake[0] = 0x50;
       handshake[1] = reqId[0];
       handshake[2] = reqId[1];
+      handshake[3] = nonceEnc.length;
+      
+      let i = 0;
+      while (i < nonceEnc.length) {
+        handshake[4 + i] = nonceEnc[i];
+        i++;
+      }
 
-      handshake[3] = userKeyHMAC.length;
+      const crc = applyCrc16(handshake);
 
-      console.log(userKeyHMAC.toString('hex'), userKeyHMAC.length);
-      handshake = Buffer.concat([handshake, userKeyHMAC], handshake.length + userKeyHMAC.length);
+      const payload = new Buffer(4 + nonceEnc.length + 2);
 
-      const crc = crcBuf(handshake);
-      console.log(crc);
-      handshake = Buffer.concat([handshake, crc], handshake.length + crc.length);
-      callback(handshake);
+      handshake.forEach((byte, i) => {
+        payload[i] = byte;
+      });
+      payload[handshake.length] = (crc >> 8) & 0xFF;
+      payload[handshake.length + 1] = crc & 0xFF;
+
+      callback(payload);
     }
   });
 
-  hmac.write(nonce.toString());
+  hmac.write(nonce);
   hmac.end();
 }
 
-/*
-if (characteristic.uuid === CRYPT) {
-                            console.log("NONCE ++++ ", data);
-                            const nonce = data;
-                            
+function prepareLockStateChangePayload(newState, callback) {
+  let payload = new Buffer(16);
 
-                            console.log(reqIDBytes);
+  for (let i = 0; i < payload.length - 2; ++i) {
+    payload[i] = getRandomByte();
+  }
 
-                          } else {
-                            callback();
-                          }
-*/
+  payload[5] = newState;
+
+  const reqIDBytes = new Buffer(14);
+  const crc = applyCrc16(payload.copy(reqIDBytes, 0, 0, 14));
+
+  payload[14] = (crc >> 8) & 0xFF;
+  payload[15] = crc & 0xFF;
+
+  payload = new Buffer([109, -29, -122, 104, 34, 1, -65, 65, 19, -4, 15, 61, -126, 83, -22, -98]);
+  const cipher = crypto.createCipheriv('aes-128-cbc', userKey, Buffer.alloc(16));
+
+  let encPayload = null;
+  let obtainedFirstHalf = false;
+  cipher.on('readable', () => {
+    const data = cipher.read();
+    if (data && !obtainedFirstHalf) {
+      encPayload = data;
+      obtainedFirstHalf = true;
+    }
+  });
+
+  cipher.on('end', () => {
+    console.log('test ===')
+    console.log(encPayload);
+    console.log(new Buffer([35, 66, 74, 20, 25, -83, 60, 43, 76, 82, 22, 13, -128, -95, -4, 97]))
+    const changeLockState = new Buffer(4 + encPayload.length);
+    changeLockState[0] = 0x1c;
+    changeLockState[1] = getRandomByte();
+    changeLockState[2] = getRandomByte();
+    changeLockState[3] = encPayload.length;
+
+    let i = 0;
+    while (i < encPayload.length) {
+      changeLockState[4 + i] = encPayload[i];
+      i++;
+    }
+
+    const crc = applyCrc16(changeLockState);
+
+    const changeLockStatePayload = new Buffer(changeLockState.length + 2);
+
+    changeLockState.forEach((byte, i) => {
+      changeLockStatePayload[i] = byte;
+    });
+    changeLockStatePayload[changeLockState.length] = (crc >> 8) & 0xFF;
+    changeLockStatePayload[changeLockState.length + 1] = crc & 0xFF;
 
 
+    callback(changeLockStatePayload);
+  });
 
-function crcBuf(dataBuf) {
-  const crc = crc16(dataBuf);
-  const buf = new Buffer(2);
-  buf.writeUInt16BE(crc);
-
-  return buf;
+  cipher.write(payload);
+  cipher.end();
 }
+
 
 function randFill(buff) {
   for (let i = 0; i < buff.length; ++i) {
-    // buff[i] = getRandomByte();
-    buff[i] = 0x00;
+    buff[i] = getRandomByte();
   }
 }
 
 function getRandomByte() {
   return Math.floor(Math.random() * Math.floor(256));
+}
+
+function applyCrc16(bytes) {
+    let crc = crc16(0, bytes[0]);
+    for (let i = 1; i < bytes.length; i++) {
+        crc = crc16(crc, bytes[i]);
+    }
+    return crc;
+}
+
+function crc16(crc, a) {
+    crc = ((a & 255) ^ crc) & 65535;
+    for (let i = 0; i < 8; i++) {
+        if ((crc & 1) == 1) {
+            crc = (((crc & 65535) >>> 1) ^ 40961) & 65535;
+        } else {
+            crc = ((crc & 65535) >>> 1) & 65535;
+        }
+    }
+    return crc;
 }
