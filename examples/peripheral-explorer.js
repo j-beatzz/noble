@@ -224,7 +224,6 @@ function explore(peripheral) {
 
                       prepareLockStateChangePayload(newState, (encPayload) => {
                         console.log('Generated Payload = ', encPayload);
-                        console.log('Expected Payload  = ', new Buffer([28, 31, 95, 16, -124, -68, 110, -102, 90, 75, -95, -108, -66, -21, -94, 70, 90, 17, 45, 16, 42, 121]));
 
                         cmdsChar.write(encPayload, false, (err) => {
                           console.log(err);
@@ -328,7 +327,7 @@ function prepareLockStateChangePayload(newState, callback) {
   payload[14] = (crc >> 8) & 0xFF;
   payload[15] = crc & 0xFF;
 
-  payload = new Buffer([109, -29, -122, 104, 34, 1, -65, 65, 19, -4, 15, 61, -126, 83, -22, -98]);
+  // payload = new Buffer([109, -29, -122, 104, 34, 1, -65, 65, 19, -4, 15, 61, -126, 83, -22, -98]);
   const cipher = crypto.createCipheriv('aes-128-cbc', userKey, Buffer.alloc(16));
 
   let encPayload = null;
